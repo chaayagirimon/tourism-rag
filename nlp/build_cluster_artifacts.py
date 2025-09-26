@@ -1,6 +1,6 @@
 # nlp/build_cluster_artifacts.py
 import os, json, math, numpy as np
-from typing import Dict, List, Iterable, Tuple
+from typing import Dict, List, Iterable, Tuple, Optional, Set
 from collections import Counter
 
 from llm.central_model import get_st_model
@@ -40,6 +40,38 @@ def _drop_bad_rows(X: np.ndarray, ids: list, texts: list):
     nonzero = (np.linalg.norm(X, axis=1) > 0)
     keep = finite & nonzero
     return X[keep], [i for i,k in zip(ids, keep) if k], [t for t,k in zip(texts, keep) if k]
+
+
+_STOPWORDS: Optional[Set[str]] = None
+
+def _get_stopwords() -> Set[str]:
+    global _STOPWORDS
+    if _STOPWORDS is not None:
+        return _STOPWORDS
+
+    try:
+        import nltk
+        from nltk.corpus import stopwords as nltk_stopwords
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "NLTK is required for stopword filtering. Install nltk before running clustering."
+        ) from exc
+
+    try:
+        nltk.data.find("corpora/stopwords")
+    except LookupError:
+        nltk.download("stopwords", quiet=True)
+
+    languages = ("english", "german", "spanish", "dutch")
+    words: Set[str] = set()
+    for lang in languages:
+        try:
+            words.update(word.lower() for word in nltk_stopwords.words(lang))
+        except OSError:
+            continue
+
+    _STOPWORDS = words
+    return _STOPWORDS
 
 
 _encoder = None
@@ -99,11 +131,14 @@ def iter_all_reviews(batch_size: int = BATCH_SIZE) -> Iterable[Tuple[str, List[s
 def _ctfidf_top_terms(docs: List[List[str]], topk: int = 15) -> List[List[str]]:
     import re
     token = re.compile(r"[A-Za-zÀ-ÿ]+")
+    stops = _get_stopwords()
     df = Counter()
     c_counts = []
     for txts in docs:
         joined = " ".join(txts[:50])
         toks = [t.lower() for t in token.findall(joined)]
+        if stops:
+            toks = [t for t in toks if t not in stops]
         df.update(set(toks))
         from collections import Counter as C
         c_counts.append(C(toks))
